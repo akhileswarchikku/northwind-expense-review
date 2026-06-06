@@ -41,6 +41,3 @@ desktop.ini
 htmlcov/
 .coverage
 
-# === Screenshots — add PNGs when ready, keep the guide ===
-screenshots/*.png
-screenshots/*.jpg
