@@ -52,7 +52,7 @@ Finance reviewers upload receipts, receive per-line-item policy verdicts with ci
 
 ### 1. Submissions List
 
-![Submissions list with employee and status filters](screenshots/01_submissions_list.png)
+![Submissions list with employee and status filters](Screenshots/01_submissions_list.png)
 
 The landing page lists every expense submission across all employees. Each row shows the employee name, trip purpose, date range, number of receipts, and an overall status badge. The status rolls up from the worst verdict among all line items — if even one item is rejected, the whole submission shows **Rejected**. The filter bar on the left lets reviewers narrow by employee or status (Pending / Compliant / Flagged / Rejected), so a finance manager can instantly pull up every flagged submission waiting for their attention without scrolling through clean ones.
 
@@ -60,7 +60,7 @@ The landing page lists every expense submission across all employees. Each row s
 
 ### 2. Submission Detail — Mixed Verdicts Side by Side
 
-![Submission detail for James Walker's Austin trip showing Torchy's (compliant) and Franklin BBQ (rejected)](screenshots/02_submission_detail_mixed.png)
+![Submission detail for James Walker's Austin trip showing Torchy's (compliant) and Franklin BBQ (rejected)](Screenshots/02_submission_detail_mixed.png)
 
 This is the detail view for **James Walker's Austin research trip**. The top card shows the employee profile (grade, department, home base) and trip context — information the AI uses when applying policies. The line items table below shows two receipts reviewed in the same trip:
 
@@ -75,7 +75,7 @@ The confidence bar fills green for high-confidence verdicts and amber/red for un
 
 ### 3. Alcohol Policy Rejection — Verbatim Policy Citations
 
-![Detail modal for Franklin Barbecue showing rejected verdict with three TEP-003 citations quoted verbatim](screenshots/03_alcohol_rejection_detail.png)
+![Detail modal for Franklin Barbecue showing rejected verdict with three TEP-003 citations quoted verbatim](Screenshots/03_alcohol_rejection_detail.png)
 
 Clicking **Details** on the Franklin Barbecue line item opens this modal. This is the most important screen in the system — it shows exactly how the AI arrived at its verdict:
 
@@ -92,7 +92,7 @@ Every quote is pulled directly from the source PDF — the AI cannot fabricate a
 
 ### 4. Over-Cap Rejection — Dollar Limit Violation
 
-![Detail modal for Alinea dinner showing $148.20 rejected against the $75/person dinner cap](screenshots/04_over_cap_rejection.png)
+![Detail modal for Alinea dinner showing $148.20 rejected against the $75/person dinner cap](Screenshots/04_over_cap_rejection.png)
 
 This modal shows **Priya Patel's Alinea dinner** on her Chicago vendor visit — a different kind of rejection from the alcohol case. The meal total was $148.20 for a solo dinner, which exceeds the **$75 per-person dinner cap** for solo travel under TEP-002 §2. The AI:
 
@@ -107,7 +107,7 @@ This demonstrates the system correctly applies context — the same restaurant o
 
 ### 5. Compliant Item — Clean Expense Passes All Checks
 
-![Detail modal for Torchy's Tacos showing compliant verdict at 100% confidence](screenshots/05_compliant_item.png)
+![Detail modal for Torchy's Tacos showing compliant verdict at 100% confidence](Screenshots/05_compliant_item.png)
 
 For contrast, this modal shows the **Torchy's Tacos lunch** from the same Austin trip — $18.40, well under the $35 solo lunch cap, no alcohol, within the trip dates. The verdict is **Compliant** at 100% confidence. The reasoning confirms the amount is within the per-person lunch cap for a Tier 2 city and no prohibited items are present. Policy citations point to TEP-002 §2 confirming the cap. The system is not a rejection machine — it correctly clears straightforward expenses so reviewers only spend time on genuine edge cases.
 
@@ -115,7 +115,7 @@ For contrast, this modal shows the **Torchy's Tacos lunch** from the same Austin
 
 ### 6. Policy Q&A — Grounded Answer with Citation
 
-![Policy Q&A tab showing a question about dinner caps answered with a verbatim TEP-002 citation](screenshots/06_qa_answer_with_citation.png)
+![Policy Q&A tab showing a question about dinner caps answered with a verbatim TEP-002 citation](Screenshots/06_qa_answer_with_citation.png)
 
 The **Policy Q&A** tab lets any reviewer ask a free-form question about the policy library and get a cited, precise answer. In this example, the question is:
 
@@ -133,7 +133,7 @@ The answer is never fabricated — if the policy chunks don't contain the answer
 
 ### 7. Policy Q&A — Out-of-Scope Refusal
 
-![Policy Q&A refusing "Who built the Eiffel Tower?" with a clear explanation](screenshots/07_qa_refusal.png)
+![Policy Q&A refusing "Who built the Eiffel Tower?" with a clear explanation](Screenshots/07_qa_refusal.png)
 
 When asked a question with no relevant policy content — here, *"Who built the Eiffel Tower?"* — the system returns a clean refusal rather than hallucinating an answer. This is driven by the retrieval confidence score: if the top-ranked policy chunk scores below the minimum threshold (0.18 on a normalized 0–1 scale), the system refuses before even calling the LLM. The refusal message explains that the question appears to be outside the scope of the Northwind policy library and suggests rephrasing if it was intended as a policy question. This is critical for reviewer trust — a system that sometimes makes things up is worse than one that clearly admits the limits of its knowledge.
 
