@@ -1,0 +1,46 @@
+# === Secrets — never commit ===
+.env
+
+# === Claude Code internal files ===
+.claude/
+
+# === Server logs ===
+*.log
+*.err
+
+# === Generated at runtime — recreated on first startup ===
+data/northwind.db
+data/chroma_db/
+data/uploads/
+
+# === Python bytecode ===
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# === Conda / virtualenv ===
+.conda/
+.venv/
+venv/
+env/
+
+# === OS noise ===
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# === IDE ===
+.vscode/
+.idea/
+*.suo
+*.user
+
+# === Pytest / coverage ===
+.pytest_cache/
+htmlcov/
+.coverage
+
+# === Screenshots — add PNGs when ready, keep the guide ===
+screenshots/*.png
+screenshots/*.jpg

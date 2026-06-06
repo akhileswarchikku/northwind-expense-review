@@ -1,0 +1,1040 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Northwind Expense Review</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: 'Inter', 'Segoe UI', system-ui, sans-serif; }
+    .verdict-compliant  { @apply bg-green-50 text-green-800 border-green-300; }
+    .verdict-flagged    { @apply bg-yellow-50 text-yellow-800 border-yellow-300; }
+    .verdict-rejected   { @apply bg-red-50 text-red-800 border-red-300; }
+    .verdict-pending    { @apply bg-gray-50 text-gray-600 border-gray-300; }
+    [x-cloak] { display: none; }
+    .fade-in { animation: fadeIn 0.2s ease-in; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+    .spinner { width:20px;height:20px;border:3px solid #e5e7eb;border-top-color:#6366f1;border-radius:50%;animation:spin .7s linear infinite;display:inline-block; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    .prose-policy { font-size:0.875rem;line-height:1.6; }
+    .confidence-bar { height:6px;border-radius:3px;background:#e5e7eb;overflow:hidden; }
+    .confidence-fill { height:100%;border-radius:3px;transition:width .3s; }
+    .drop-zone { border:2px dashed #a5b4fc;border-radius:8px;transition:all .2s; }
+    .drop-zone.drag-over { border-color:#6366f1;background:#eef2ff; }
+    pre { white-space: pre-wrap; word-break: break-word; }
+  </style>
+</head>
+<body class="bg-gray-50 text-gray-900 min-h-screen">
+
+<!-- ── Top Navigation ── -->
+<nav class="bg-white border-b border-gray-200 sticky top-0 z-50 shadow-sm">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 flex items-center justify-between h-14">
+    <div class="flex items-center gap-3">
+      <div class="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-bold text-sm">NW</div>
+      <span class="font-semibold text-gray-800">Northwind Expense Review</span>
+    </div>
+    <div class="flex gap-1" id="nav-tabs">
+      <button onclick="navigate('submissions')" id="nav-submissions"
+        class="nav-tab px-4 py-2 rounded-md text-sm font-medium transition-colors">
+        Submissions
+      </button>
+      <button onclick="navigate('employees')" id="nav-employees"
+        class="nav-tab px-4 py-2 rounded-md text-sm font-medium transition-colors">
+        Employees
+      </button>
+      <button onclick="navigate('qa')" id="nav-qa"
+        class="nav-tab px-4 py-2 rounded-md text-sm font-medium transition-colors">
+        Policy Q&amp;A
+      </button>
+    </div>
+    <div id="index-status" class="text-xs text-gray-400"></div>
+  </div>
+</nav>
+
+<!-- ── Main Content ── -->
+<main class="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+  <div id="view-submissions" class="view"></div>
+  <div id="view-submission-detail" class="view hidden"></div>
+  <div id="view-employees" class="view hidden"></div>
+  <div id="view-qa" class="view hidden"></div>
+</main>
+
+<!-- ── Modals ── -->
+<div id="modal-overlay" class="fixed inset-0 bg-black/50 z-50 hidden flex items-center justify-center p-4">
+  <div id="modal-content" class="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto"></div>
+</div>
+
+<script>
+// ============================================================
+// State & API helpers
+// ============================================================
+const API = '';
+
+async function api(method, path, body, isForm = false) {
+  const opts = { method, headers: {} };
+  if (body && !isForm) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(body);
+  } else if (body && isForm) {
+    opts.body = body; // FormData
+  }
+  const r = await fetch(API + path, opts);
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({ detail: r.statusText }));
+    throw new Error(err.detail || r.statusText);
+  }
+  if (r.status === 204) return null;
+  return r.json();
+}
+
+const get  = (p) => api('GET', p);
+const post = (p, b, form) => api('POST', p, b, form);
+const del  = (p) => api('DELETE', p);
+const put  = (p, b) => api('PUT', p, b);
+
+let currentView = 'submissions';
+let employees = [];
+
+// ============================================================
+// Navigation
+// ============================================================
+function navigate(view, param) {
+  currentView = view;
+  document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
+  document.querySelectorAll('.nav-tab').forEach(t => {
+    t.classList.remove('bg-indigo-50', 'text-indigo-700');
+    t.classList.add('text-gray-600', 'hover:bg-gray-100');
+  });
+  const tab = document.getElementById('nav-' + view.split('-')[0]);
+  if (tab) {
+    tab.classList.add('bg-indigo-50', 'text-indigo-700');
+    tab.classList.remove('text-gray-600', 'hover:bg-gray-100');
+  }
+
+  if (view === 'submissions') renderSubmissions();
+  else if (view === 'submission-detail') renderSubmissionDetail(param);
+  else if (view === 'employees') renderEmployees();
+  else if (view === 'qa') renderQA();
+}
+
+// ============================================================
+// Verdict helpers
+// ============================================================
+function verdictBadge(verdict, overridden = false) {
+  const map = {
+    compliant: 'bg-green-100 text-green-800',
+    flagged:   'bg-yellow-100 text-yellow-800',
+    rejected:  'bg-red-100 text-red-800',
+  };
+  const cls = map[verdict] || 'bg-gray-100 text-gray-700';
+  const label = verdict ? verdict.charAt(0).toUpperCase() + verdict.slice(1) : 'Pending';
+  const icon = verdict === 'compliant' ? '✓' : verdict === 'rejected' ? '✗' : '⚠';
+  const overrideMark = overridden ? ' <span class="text-blue-600 text-xs font-bold">⟳ Overridden</span>' : '';
+  return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${cls}">${icon} ${label}</span>${overrideMark}`;
+}
+
+function confidenceBar(conf) {
+  if (conf == null) return '';
+  const pct = Math.round(conf * 100);
+  const color = conf >= 0.7 ? 'bg-green-500' : conf >= 0.4 ? 'bg-yellow-500' : 'bg-red-500';
+  return `<div class="flex items-center gap-2">
+    <div class="confidence-bar flex-1"><div class="confidence-fill ${color}" style="width:${pct}%"></div></div>
+    <span class="text-xs text-gray-500 w-8">${pct}%</span>
+  </div>`;
+}
+
+function fmtAmt(amt, currency = 'USD') {
+  if (amt == null) return '—';
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amt);
+}
+
+function fmtDate(d) {
+  if (!d) return '—';
+  return d;
+}
+
+// ============================================================
+// Submissions List
+// ============================================================
+async function renderSubmissions() {
+  const el = document.getElementById('view-submissions');
+  el.classList.remove('hidden');
+  el.innerHTML = `<div class="flex justify-between items-center mb-6">
+    <h1 class="text-xl font-bold text-gray-900">Expense Submissions</h1>
+    <button onclick="showNewSubmissionModal()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+      + New Submission
+    </button>
+  </div>
+  <div class="flex gap-3 mb-4">
+    <select id="filter-employee" onchange="filterSubmissions()" class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-700 focus:ring-2 focus:ring-indigo-500 focus:outline-none">
+      <option value="">All Employees</option>
+    </select>
+    <select id="filter-status" onchange="filterSubmissions()" class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-700 focus:ring-2 focus:ring-indigo-500 focus:outline-none">
+      <option value="">All Statuses</option>
+      <option value="pending">Pending</option>
+      <option value="needs_review">Needs Review</option>
+      <option value="reviewed">Reviewed</option>
+      <option value="approved">Approved</option>
+    </select>
+  </div>
+  <div id="submissions-table-wrap">
+    <div class="flex justify-center py-10"><div class="spinner"></div></div>
+  </div>`;
+
+  try {
+    const [subs, emps] = await Promise.all([get('/api/submissions'), get('/api/employees')]);
+    employees = emps;
+    window._allSubmissions = subs;
+
+    const sel = document.getElementById('filter-employee');
+    emps.forEach(e => {
+      const opt = document.createElement('option');
+      opt.value = e.id;
+      opt.textContent = e.name;
+      sel.appendChild(opt);
+    });
+    renderSubmissionsTable(subs);
+  } catch (e) {
+    document.getElementById('submissions-table-wrap').innerHTML = `<div class="text-red-600 p-4">Error: ${e.message}</div>`;
+  }
+}
+
+function filterSubmissions() {
+  const empId = document.getElementById('filter-employee').value;
+  const status = document.getElementById('filter-status').value;
+  let subs = window._allSubmissions || [];
+  if (empId) subs = subs.filter(s => s.employee_id === empId);
+  if (status) subs = subs.filter(s => s.status === status);
+  renderSubmissionsTable(subs);
+}
+
+function renderSubmissionsTable(subs) {
+  const wrap = document.getElementById('submissions-table-wrap');
+  if (!subs.length) {
+    wrap.innerHTML = `<div class="text-center py-16 text-gray-400">
+      <div class="text-4xl mb-3">📋</div>
+      <p class="text-sm">No submissions yet. Create one to get started.</p>
+    </div>`;
+    return;
+  }
+
+  const statusBadge = s => {
+    const m = { pending:'bg-gray-100 text-gray-600', needs_review:'bg-orange-100 text-orange-700', reviewed:'bg-blue-100 text-blue-700', approved:'bg-green-100 text-green-700' };
+    return `<span class="px-2 py-0.5 rounded-full text-xs font-medium ${m[s]||'bg-gray-100 text-gray-600'}">${s?.replace('_',' ') || 'pending'}</span>`;
+  };
+
+  const rows = subs.map(s => {
+    const emp = s.employee;
+    const total = s.line_items.reduce((a, li) => a + (li.amount || 0), 0);
+    const counts = { compliant: 0, flagged: 0, rejected: 0 };
+    s.line_items.forEach(li => { if (li.verdict) counts[li.verdict] = (counts[li.verdict] || 0) + 1; });
+    const pills = Object.entries(counts).filter(([,v])=>v>0).map(([k,v]) => {
+      const c = k==='compliant'?'text-green-700':k==='flagged'?'text-yellow-700':'text-red-700';
+      return `<span class="${c} text-xs">${v} ${k}</span>`;
+    }).join(' · ');
+
+    return `<tr class="hover:bg-gray-50 cursor-pointer transition-colors" onclick="navigate('submission-detail','${s.id}')">
+      <td class="px-4 py-3">
+        <div class="font-medium text-gray-900">${emp?.name || s.employee_id}</div>
+        <div class="text-xs text-gray-400">${emp?.title || ''}</div>
+      </td>
+      <td class="px-4 py-3 text-sm text-gray-600 max-w-xs">
+        <div class="truncate">${s.trip_purpose || '—'}</div>
+        <div class="text-xs text-gray-400">${s.trip_dates_start} → ${s.trip_dates_end}</div>
+      </td>
+      <td class="px-4 py-3 text-sm text-gray-700">${s.line_items.length} item${s.line_items.length !== 1 ? 's' : ''}</td>
+      <td class="px-4 py-3 text-sm font-medium">${fmtAmt(total)}</td>
+      <td class="px-4 py-3">${pills || '<span class="text-xs text-gray-400">no items</span>'}</td>
+      <td class="px-4 py-3">${statusBadge(s.status)}</td>
+      <td class="px-4 py-3 text-xs text-gray-400">${new Date(s.created_at).toLocaleDateString()}</td>
+    </tr>`;
+  }).join('');
+
+  wrap.innerHTML = `<div class="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+    <table class="w-full">
+      <thead class="bg-gray-50 border-b border-gray-200">
+        <tr>
+          <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Employee</th>
+          <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Trip</th>
+          <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Items</th>
+          <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Total</th>
+          <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Verdicts</th>
+          <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
+          <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Created</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100">${rows}</tbody>
+    </table>
+  </div>`;
+}
+
+// ============================================================
+// New Submission Modal
+// ============================================================
+async function showNewSubmissionModal() {
+  if (!employees.length) {
+    employees = await get('/api/employees');
+  }
+  const empOpts = employees.map(e =>
+    `<option value="${e.id}">${e.name} — ${e.title}</option>`
+  ).join('');
+
+  showModal(`
+    <div class="p-6">
+      <h2 class="text-lg font-bold mb-4">New Expense Submission</h2>
+      <form id="new-sub-form" onsubmit="submitNewSubmission(event)">
+        <div class="space-y-4">
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Employee</label>
+            <select id="new-emp" required class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none">
+              <option value="">Select employee…</option>
+              ${empOpts}
+              <option value="__new__">+ Create new employee</option>
+            </select>
+          </div>
+          <div id="new-emp-fields" class="hidden space-y-4">
+            <div class="bg-indigo-50 rounded-lg p-4 space-y-3">
+              <p class="text-xs text-indigo-700 font-medium">New Employee Details</p>
+              <div class="grid grid-cols-2 gap-3">
+                <div>
+                  <label class="block text-xs font-medium text-gray-600 mb-1">Employee ID</label>
+                  <input id="ne-id" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:ring-1 focus:ring-indigo-500 focus:outline-none" placeholder="NW-XXXXX" />
+                </div>
+                <div>
+                  <label class="block text-xs font-medium text-gray-600 mb-1">Full Name</label>
+                  <input id="ne-name" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:ring-1 focus:ring-indigo-500 focus:outline-none" placeholder="Jane Smith" />
+                </div>
+                <div>
+                  <label class="block text-xs font-medium text-gray-600 mb-1">Grade (1–10)</label>
+                  <input id="ne-grade" type="number" min="1" max="10" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:ring-1 focus:ring-indigo-500 focus:outline-none" placeholder="5" />
+                </div>
+                <div>
+                  <label class="block text-xs font-medium text-gray-600 mb-1">Title</label>
+                  <input id="ne-title" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:ring-1 focus:ring-indigo-500 focus:outline-none" placeholder="Manager, Finance" />
+                </div>
+                <div>
+                  <label class="block text-xs font-medium text-gray-600 mb-1">Department</label>
+                  <input id="ne-dept" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:ring-1 focus:ring-indigo-500 focus:outline-none" placeholder="Finance" />
+                </div>
+                <div>
+                  <label class="block text-xs font-medium text-gray-600 mb-1">Home Base</label>
+                  <input id="ne-base" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:ring-1 focus:ring-indigo-500 focus:outline-none" placeholder="Irvine, CA" />
+                </div>
+              </div>
+            </div>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Trip Purpose</label>
+            <input id="new-purpose" required class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none" placeholder="e.g. Quarterly client review in Denver" />
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Trip Start</label>
+              <input id="new-start" type="date" required class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none" />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Trip End</label>
+              <input id="new-end" type="date" required class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none" />
+            </div>
+          </div>
+        </div>
+        <div id="new-sub-error" class="mt-3 text-red-600 text-sm hidden"></div>
+        <div class="flex gap-3 mt-6">
+          <button type="submit" class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-lg text-sm font-medium transition-colors">
+            Create Submission
+          </button>
+          <button type="button" onclick="closeModal()" class="px-4 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 hover:bg-gray-50 transition-colors">
+            Cancel
+          </button>
+        </div>
+      </form>
+    </div>
+  `);
+
+  document.getElementById('new-emp').addEventListener('change', e => {
+    document.getElementById('new-emp-fields').classList.toggle('hidden', e.target.value !== '__new__');
+  });
+}
+
+async function submitNewSubmission(e) {
+  e.preventDefault();
+  const errEl = document.getElementById('new-sub-error');
+  errEl.classList.add('hidden');
+
+  let empId = document.getElementById('new-emp').value;
+
+  if (empId === '__new__') {
+    const newEmp = {
+      id: document.getElementById('ne-id').value.trim(),
+      name: document.getElementById('ne-name').value.trim(),
+      grade: parseInt(document.getElementById('ne-grade').value) || 5,
+      title: document.getElementById('ne-title').value.trim(),
+      department: document.getElementById('ne-dept').value.trim(),
+      home_base: document.getElementById('ne-base').value.trim(),
+    };
+    if (!newEmp.id || !newEmp.name) {
+      errEl.textContent = 'Employee ID and name are required.';
+      errEl.classList.remove('hidden');
+      return;
+    }
+    try {
+      await post('/api/employees', newEmp);
+      employees = await get('/api/employees');
+      empId = newEmp.id;
+    } catch (ex) {
+      errEl.textContent = 'Failed to create employee: ' + ex.message;
+      errEl.classList.remove('hidden');
+      return;
+    }
+  }
+
+  const body = {
+    employee_id: empId,
+    trip_purpose: document.getElementById('new-purpose').value.trim(),
+    trip_dates_start: document.getElementById('new-start').value,
+    trip_dates_end: document.getElementById('new-end').value,
+  };
+
+  try {
+    const sub = await post('/api/submissions', body);
+    closeModal();
+    navigate('submission-detail', sub.id);
+  } catch (ex) {
+    errEl.textContent = ex.message;
+    errEl.classList.remove('hidden');
+  }
+}
+
+// ============================================================
+// Submission Detail
+// ============================================================
+async function renderSubmissionDetail(subId) {
+  const el = document.getElementById('view-submission-detail');
+  el.classList.remove('hidden');
+  el.innerHTML = `<div class="flex justify-center py-10"><div class="spinner"></div></div>`;
+
+  try {
+    const sub = await get(`/api/submissions/${subId}`);
+    window._currentSub = sub;
+    renderSubDetail(sub);
+  } catch (ex) {
+    el.innerHTML = `<div class="text-red-600 p-4">Error: ${ex.message}</div>`;
+  }
+}
+
+function renderSubDetail(sub) {
+  const el = document.getElementById('view-submission-detail');
+  const emp = sub.employee;
+  const total = sub.line_items.reduce((a, li) => a + (li.amount || 0), 0);
+  const counts = { compliant: 0, flagged: 0, rejected: 0 };
+  sub.line_items.forEach(li => {
+    const v = li.overrides?.length ? li.overrides[li.overrides.length-1].new_verdict : li.verdict;
+    if (v) counts[v] = (counts[v] || 0) + 1;
+  });
+
+  const lineItemRows = sub.line_items.length ? sub.line_items.map(li => {
+    const lastOverride = li.overrides?.length ? li.overrides[li.overrides.length-1] : null;
+    const effectiveVerdict = lastOverride ? lastOverride.new_verdict : li.verdict;
+    const isOverridden = !!lastOverride;
+    const rowBg = effectiveVerdict === 'rejected' ? 'bg-red-50/30' : effectiveVerdict === 'flagged' ? 'bg-yellow-50/30' : '';
+    return `<tr class="${rowBg} hover:bg-gray-50 transition-colors">
+      <td class="px-4 py-3">
+        <div class="text-sm font-medium text-gray-800">${li.vendor || '—'}</div>
+        <div class="text-xs text-gray-400 font-mono">${li.filename}</div>
+      </td>
+      <td class="px-4 py-3 text-sm text-gray-600">${fmtDate(li.date)}</td>
+      <td class="px-4 py-3 text-sm font-medium text-gray-900">${fmtAmt(li.amount, li.currency)}</td>
+      <td class="px-4 py-3">
+        <span class="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 capitalize">${li.category || '—'}</span>
+      </td>
+      <td class="px-4 py-3">${verdictBadge(effectiveVerdict, isOverridden)}</td>
+      <td class="px-4 py-3">${confidenceBar(li.confidence)}</td>
+      <td class="px-4 py-3">
+        <div class="flex gap-2">
+          <button onclick="showLineItemDetail('${li.id}')" class="text-xs text-indigo-600 hover:text-indigo-800 font-medium">Details</button>
+          <button onclick="showOverrideModal('${li.id}','${effectiveVerdict}')" class="text-xs text-gray-500 hover:text-gray-700 font-medium">Override</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="7" class="px-4 py-8 text-center text-gray-400 text-sm">No receipts uploaded yet.</td></tr>`;
+
+  el.innerHTML = `
+    <div class="fade-in">
+      <!-- Back & header -->
+      <div class="flex items-center gap-3 mb-6">
+        <button onclick="navigate('submissions')" class="text-gray-400 hover:text-gray-600 text-sm flex items-center gap-1">
+          ← Back
+        </button>
+        <h1 class="text-xl font-bold text-gray-900">Submission Details</h1>
+      </div>
+
+      <!-- Employee + Trip Info Cards -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+        <div class="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
+          <div class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Employee</div>
+          <div class="font-semibold text-gray-900">${emp?.name || sub.employee_id}</div>
+          <div class="text-sm text-gray-500">${emp?.title || ''}</div>
+          <div class="flex gap-4 mt-2 text-xs text-gray-400">
+            <span>Grade ${emp?.grade || '—'}</span>
+            <span>${emp?.department || ''}</span>
+            <span>${emp?.home_base || ''}</span>
+          </div>
+        </div>
+        <div class="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
+          <div class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Trip Context</div>
+          <div class="text-sm font-medium text-gray-900">${sub.trip_purpose}</div>
+          <div class="text-xs text-gray-400 mt-1">${sub.trip_dates_start} → ${sub.trip_dates_end}</div>
+        </div>
+      </div>
+
+      <!-- Summary Stats -->
+      <div class="grid grid-cols-4 gap-4 mb-6">
+        <div class="bg-white border border-gray-200 rounded-xl p-4 shadow-sm text-center">
+          <div class="text-2xl font-bold text-gray-900">${fmtAmt(total)}</div>
+          <div class="text-xs text-gray-400 mt-0.5">Total Claimed</div>
+        </div>
+        <div class="bg-green-50 border border-green-200 rounded-xl p-4 shadow-sm text-center">
+          <div class="text-2xl font-bold text-green-700">${counts.compliant || 0}</div>
+          <div class="text-xs text-green-600 mt-0.5">Compliant</div>
+        </div>
+        <div class="bg-yellow-50 border border-yellow-200 rounded-xl p-4 shadow-sm text-center">
+          <div class="text-2xl font-bold text-yellow-700">${counts.flagged || 0}</div>
+          <div class="text-xs text-yellow-600 mt-0.5">Flagged</div>
+        </div>
+        <div class="bg-red-50 border border-red-200 rounded-xl p-4 shadow-sm text-center">
+          <div class="text-2xl font-bold text-red-700">${counts.rejected || 0}</div>
+          <div class="text-xs text-red-600 mt-0.5">Rejected</div>
+        </div>
+      </div>
+
+      <!-- Upload receipts -->
+      <div class="bg-white border border-gray-200 rounded-xl p-4 mb-6 shadow-sm">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="font-semibold text-gray-800">Upload Receipts</h2>
+          <span class="text-xs text-gray-400">PDF, JPG, PNG, TXT accepted</span>
+        </div>
+        <div id="drop-zone-${sub.id}" class="drop-zone p-6 text-center cursor-pointer" onclick="document.getElementById('file-input-${sub.id}').click()">
+          <div class="text-gray-400 mb-2">📎</div>
+          <p class="text-sm text-gray-500">Drop receipts here or <span class="text-indigo-600 font-medium">browse</span></p>
+          <p class="text-xs text-gray-400 mt-1">Multiple files allowed</p>
+        </div>
+        <input type="file" id="file-input-${sub.id}" multiple accept=".pdf,.jpg,.jpeg,.png,.txt,.webp" class="hidden" onchange="uploadReceipts('${sub.id}', this)" />
+        <div id="upload-status-${sub.id}" class="mt-3 hidden"></div>
+      </div>
+
+      <!-- Line Items Table -->
+      <div class="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+        <div class="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+          <h2 class="font-semibold text-gray-800">Line Items</h2>
+          <span class="text-xs text-gray-400">${sub.line_items.length} receipt${sub.line_items.length !== 1 ? 's' : ''}</span>
+        </div>
+        <table class="w-full">
+          <thead class="bg-gray-50 border-b border-gray-100">
+            <tr>
+              <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Vendor</th>
+              <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Date</th>
+              <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Amount</th>
+              <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Category</th>
+              <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Verdict</th>
+              <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Confidence</th>
+              <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Actions</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-100">${lineItemRows}</tbody>
+        </table>
+      </div>
+    </div>
+  `;
+
+  // Wire up drag-and-drop
+  const dz = document.getElementById(`drop-zone-${sub.id}`);
+  if (dz) {
+    dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag-over'); });
+    dz.addEventListener('dragleave', () => dz.classList.remove('drag-over'));
+    dz.addEventListener('drop', e => {
+      e.preventDefault();
+      dz.classList.remove('drag-over');
+      uploadReceiptsFromFiles(sub.id, e.dataTransfer.files);
+    });
+  }
+}
+
+async function uploadReceipts(subId, input) {
+  await uploadReceiptsFromFiles(subId, input.files);
+}
+
+async function uploadReceiptsFromFiles(subId, files) {
+  if (!files || !files.length) return;
+  const statusEl = document.getElementById(`upload-status-${subId}`);
+  statusEl.classList.remove('hidden');
+  statusEl.innerHTML = `<div class="flex items-center gap-2 text-sm text-indigo-600"><div class="spinner"></div> Uploading and reviewing ${files.length} receipt${files.length>1?'s':''}… (this may take a moment)</div>`;
+
+  const fd = new FormData();
+  for (const f of files) fd.append('files', f);
+
+  try {
+    const sub = await post(`/api/submissions/${subId}/receipts`, fd, true);
+    window._currentSub = sub;
+    renderSubDetail(sub);
+  } catch (ex) {
+    statusEl.innerHTML = `<div class="text-red-600 text-sm">Upload failed: ${ex.message}</div>`;
+  }
+}
+
+// ============================================================
+// Line Item Detail Modal
+// ============================================================
+async function showLineItemDetail(itemId) {
+  showModal(`<div class="p-6 flex justify-center"><div class="spinner"></div></div>`);
+  try {
+    const li = await get(`/api/line_items/${itemId}`);
+    const lastOverride = li.overrides?.length ? li.overrides[li.overrides.length-1] : null;
+    const effectiveVerdict = lastOverride ? lastOverride.new_verdict : li.verdict;
+    const isOverridden = !!lastOverride;
+
+    let citations = [];
+    try { citations = JSON.parse(li.policy_citations || '[]'); } catch{}
+    let flags = [];
+    try { flags = JSON.parse(li.flags || '[]'); } catch{}
+
+    const citHtml = citations.length ? citations.map(c => `
+      <div class="bg-gray-50 border border-gray-200 rounded-lg p-3 mb-2">
+        <div class="flex items-center gap-2 mb-1">
+          <span class="text-xs font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded">${c.doc_id || ''}</span>
+          <span class="text-xs text-gray-500">${c.section || ''}</span>
+        </div>
+        <blockquote class="text-xs text-gray-700 border-l-2 border-indigo-300 pl-2 italic">"${c.quote || ''}"</blockquote>
+        ${c.relevance ? `<p class="text-xs text-gray-500 mt-1">${c.relevance}</p>` : ''}
+      </div>`).join('') : `<p class="text-sm text-gray-400 italic">No policy citations available.</p>`;
+
+    const flagHtml = flags.filter(f=>f).map(f =>
+      `<span class="text-xs bg-orange-50 text-orange-700 px-2 py-0.5 rounded">${f}</span>`
+    ).join(' ');
+
+    const overrideHistory = li.overrides?.length ? `
+      <div class="mt-4">
+        <h4 class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Override History</h4>
+        ${li.overrides.map(o => `
+          <div class="bg-blue-50 border border-blue-100 rounded-lg p-3 mb-2 text-xs">
+            <div class="flex items-center justify-between mb-1">
+              <span class="font-medium text-blue-800">${o.reviewer}</span>
+              <span class="text-blue-400">${new Date(o.created_at).toLocaleString()}</span>
+            </div>
+            <div class="text-blue-700">${o.original_verdict} → <strong>${o.new_verdict}</strong></div>
+            ${o.comment ? `<div class="text-blue-600 mt-1">"${o.comment}"</div>` : ''}
+          </div>`).join('')}
+      </div>` : '';
+
+    showModal(`
+      <div class="p-6">
+        <div class="flex items-start justify-between mb-4">
+          <div>
+            <h2 class="text-lg font-bold text-gray-900">${li.vendor || 'Receipt'}</h2>
+            <div class="text-xs text-gray-400 font-mono mt-0.5">${li.filename}</div>
+          </div>
+          <button onclick="closeModal()" class="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
+        </div>
+
+        <!-- Receipt info grid -->
+        <div class="grid grid-cols-3 gap-3 mb-4">
+          <div class="bg-gray-50 rounded-lg p-3">
+            <div class="text-xs text-gray-400 mb-0.5">Amount</div>
+            <div class="font-bold text-gray-900">${fmtAmt(li.amount, li.currency)}</div>
+          </div>
+          <div class="bg-gray-50 rounded-lg p-3">
+            <div class="text-xs text-gray-400 mb-0.5">Date</div>
+            <div class="font-medium text-gray-900">${li.date || '—'}</div>
+          </div>
+          <div class="bg-gray-50 rounded-lg p-3">
+            <div class="text-xs text-gray-400 mb-0.5">Category</div>
+            <div class="font-medium text-gray-900 capitalize">${li.category || '—'}</div>
+          </div>
+        </div>
+
+        ${li.description ? `<p class="text-sm text-gray-600 mb-4">${li.description}</p>` : ''}
+
+        <!-- Verdict -->
+        <div class="border rounded-xl p-4 mb-4 ${effectiveVerdict === 'rejected' ? 'border-red-200 bg-red-50' : effectiveVerdict === 'flagged' ? 'border-yellow-200 bg-yellow-50' : 'border-green-200 bg-green-50'}">
+          <div class="flex items-center justify-between mb-2">
+            <div class="flex items-center gap-2">
+              ${verdictBadge(effectiveVerdict, isOverridden)}
+              ${isOverridden ? `<span class="text-xs text-gray-400">(was: ${li.overrides[0].original_verdict})</span>` : ''}
+            </div>
+            <div class="flex items-center gap-2">
+              <span class="text-xs text-gray-500">Confidence</span>
+              <div class="w-24">${confidenceBar(li.confidence)}</div>
+            </div>
+          </div>
+          <p class="text-sm text-gray-700 leading-relaxed">${li.reasoning || 'No reasoning available.'}</p>
+          ${flagHtml ? `<div class="flex flex-wrap gap-1 mt-2">${flagHtml}</div>` : ''}
+        </div>
+
+        <!-- Policy Citations -->
+        <div class="mb-4">
+          <h3 class="text-sm font-semibold text-gray-700 mb-2">Policy Citations</h3>
+          ${citHtml}
+        </div>
+
+        ${overrideHistory}
+
+        <!-- Actions -->
+        <div class="flex gap-3 pt-4 border-t border-gray-100">
+          <button onclick="closeModal();showOverrideModal('${li.id}','${effectiveVerdict}')" class="flex-1 border border-indigo-300 text-indigo-600 hover:bg-indigo-50 py-2 rounded-lg text-sm font-medium transition-colors">
+            Override Verdict
+          </button>
+          <button onclick="closeModal()" class="px-4 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 hover:bg-gray-50 transition-colors">
+            Close
+          </button>
+        </div>
+      </div>
+    `);
+  } catch (ex) {
+    showModal(`<div class="p-6 text-red-600">Error: ${ex.message}</div>`);
+  }
+}
+
+// ============================================================
+// Override Modal
+// ============================================================
+function showOverrideModal(itemId, currentVerdict) {
+  showModal(`
+    <div class="p-6">
+      <h2 class="text-lg font-bold mb-4">Override Verdict</h2>
+      <div class="mb-4">
+        <p class="text-sm text-gray-500">Current verdict: ${verdictBadge(currentVerdict)}</p>
+      </div>
+      <div class="space-y-4">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Your Name</label>
+          <input id="ov-reviewer" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none" placeholder="Finance Reviewer" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">New Verdict</label>
+          <select id="ov-verdict" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none">
+            <option value="compliant">✓ Compliant — Approve</option>
+            <option value="flagged">⚠ Flagged — Needs Further Review</option>
+            <option value="rejected">✗ Rejected — Not Reimbursable</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Comment <span class="text-gray-400 font-normal">(required)</span></label>
+          <textarea id="ov-comment" rows="3" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none" placeholder="Reason for override…"></textarea>
+        </div>
+      </div>
+      <div id="ov-error" class="mt-2 text-red-600 text-sm hidden"></div>
+      <div class="flex gap-3 mt-6">
+        <button onclick="submitOverride('${itemId}')" class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-lg text-sm font-medium transition-colors">
+          Save Override
+        </button>
+        <button onclick="closeModal()" class="px-4 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 hover:bg-gray-50 transition-colors">Cancel</button>
+      </div>
+    </div>
+  `);
+}
+
+async function submitOverride(itemId) {
+  const reviewer = document.getElementById('ov-reviewer').value.trim();
+  const verdict  = document.getElementById('ov-verdict').value;
+  const comment  = document.getElementById('ov-comment').value.trim();
+  const errEl    = document.getElementById('ov-error');
+
+  if (!reviewer || !comment) {
+    errEl.textContent = 'Reviewer name and comment are required.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+
+  try {
+    await post(`/api/line_items/${itemId}/override`, { reviewer, new_verdict: verdict, comment });
+    closeModal();
+    // Refresh the current submission
+    if (window._currentSub) {
+      renderSubmissionDetail(window._currentSub.id);
+    }
+  } catch (ex) {
+    errEl.textContent = ex.message;
+    errEl.classList.remove('hidden');
+  }
+}
+
+// ============================================================
+// Employees View
+// ============================================================
+async function renderEmployees() {
+  const el = document.getElementById('view-employees');
+  el.classList.remove('hidden');
+  el.innerHTML = `<div class="flex justify-between items-center mb-6">
+    <h1 class="text-xl font-bold">Employees</h1>
+    <button onclick="showAddEmployeeModal()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium">+ Add Employee</button>
+  </div>
+  <div id="employees-grid"><div class="flex justify-center py-10"><div class="spinner"></div></div></div>`;
+
+  try {
+    const emps = await get('/api/employees');
+    employees = emps;
+
+    const gradeLabel = g => {
+      const m = {1:'Associate',2:'Senior Associate',3:'Specialist',4:'Senior Specialist',5:'Manager',6:'Senior Manager',7:'Director',8:'Senior Director',9:'Vice President',10:'SVP/C-suite'};
+      return m[g] || `Grade ${g}`;
+    };
+
+    if (!emps.length) {
+      document.getElementById('employees-grid').innerHTML = `<div class="text-center py-16 text-gray-400 text-sm">No employees found.</div>`;
+      return;
+    }
+
+    const cards = emps.map(e => `
+      <div class="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
+        <div class="flex items-start gap-3">
+          <div class="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold text-sm flex-shrink-0">
+            ${e.name.split(' ').map(n=>n[0]).join('').slice(0,2)}
+          </div>
+          <div class="min-w-0">
+            <div class="font-semibold text-gray-900">${e.name}</div>
+            <div class="text-xs text-gray-500">${e.title}</div>
+            <div class="flex gap-3 mt-2 text-xs text-gray-400">
+              <span class="bg-gray-100 px-2 py-0.5 rounded text-gray-600">${gradeLabel(e.grade)}</span>
+              <span>${e.department}</span>
+            </div>
+            <div class="text-xs text-gray-400 mt-1">📍 ${e.home_base} · ID: ${e.id}</div>
+          </div>
+        </div>
+      </div>`).join('');
+
+    document.getElementById('employees-grid').innerHTML = `<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">${cards}</div>`;
+  } catch (ex) {
+    document.getElementById('employees-grid').innerHTML = `<div class="text-red-600 p-4">Error: ${ex.message}</div>`;
+  }
+}
+
+function showAddEmployeeModal() {
+  showModal(`
+    <div class="p-6">
+      <h2 class="text-lg font-bold mb-4">Add Employee</h2>
+      <div class="space-y-3">
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-medium text-gray-600 mb-1">Employee ID *</label>
+            <input id="ae-id" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:ring-1 focus:ring-indigo-500 focus:outline-none" placeholder="NW-XXXXX" />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-gray-600 mb-1">Full Name *</label>
+            <input id="ae-name" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:ring-1 focus:ring-indigo-500 focus:outline-none" />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-gray-600 mb-1">Grade (1-10) *</label>
+            <input id="ae-grade" type="number" min="1" max="10" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:ring-1 focus:ring-indigo-500 focus:outline-none" />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-gray-600 mb-1">Title</label>
+            <input id="ae-title" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:ring-1 focus:ring-indigo-500 focus:outline-none" />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-gray-600 mb-1">Department</label>
+            <input id="ae-dept" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:ring-1 focus:ring-indigo-500 focus:outline-none" />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-gray-600 mb-1">Home Base</label>
+            <input id="ae-base" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:ring-1 focus:ring-indigo-500 focus:outline-none" placeholder="City, ST" />
+          </div>
+        </div>
+      </div>
+      <div id="ae-error" class="mt-2 text-red-600 text-sm hidden"></div>
+      <div class="flex gap-3 mt-5">
+        <button onclick="submitAddEmployee()" class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-lg text-sm font-medium">Save</button>
+        <button onclick="closeModal()" class="px-4 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 hover:bg-gray-50">Cancel</button>
+      </div>
+    </div>
+  `);
+}
+
+async function submitAddEmployee() {
+  const errEl = document.getElementById('ae-error');
+  const emp = {
+    id: document.getElementById('ae-id').value.trim(),
+    name: document.getElementById('ae-name').value.trim(),
+    grade: parseInt(document.getElementById('ae-grade').value) || 0,
+    title: document.getElementById('ae-title').value.trim(),
+    department: document.getElementById('ae-dept').value.trim(),
+    home_base: document.getElementById('ae-base').value.trim(),
+  };
+  if (!emp.id || !emp.name || !emp.grade) {
+    errEl.textContent = 'ID, Name, and Grade are required.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+  try {
+    await post('/api/employees', emp);
+    closeModal();
+    renderEmployees();
+  } catch (ex) {
+    errEl.textContent = ex.message;
+    errEl.classList.remove('hidden');
+  }
+}
+
+// ============================================================
+// Policy Q&A
+// ============================================================
+function renderQA() {
+  const el = document.getElementById('view-qa');
+  el.classList.remove('hidden');
+  el.innerHTML = `
+    <div class="max-w-3xl mx-auto">
+      <div class="mb-6">
+        <h1 class="text-xl font-bold text-gray-900">Policy Q&amp;A</h1>
+        <p class="text-sm text-gray-500 mt-1">Ask questions about Northwind's expense policies. The system will cite specific clauses or decline if the question is outside the policy library.</p>
+      </div>
+
+      <div id="qa-history" class="space-y-4 mb-6 min-h-24"></div>
+
+      <div class="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
+        <div class="flex gap-3">
+          <input id="qa-input" class="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+            placeholder="e.g. What's the dinner cap for solo travel? Can I expense alcohol with a client?"
+            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendQA();}" />
+          <button onclick="sendQA()" id="qa-btn" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">Ask</button>
+        </div>
+        <div class="flex flex-wrap gap-2 mt-3">
+          ${[
+            "What is the per-person dinner cap for individual travel?",
+            "Can I expense alcohol when traveling solo?",
+            "What hotels are covered in Chicago?",
+            "What flight class can I book for domestic travel?",
+            "What is the meal cap for client entertainment?",
+          ].map(q => `<button onclick="document.getElementById('qa-input').value='${q.replace(/'/g,"\\'")}'" class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-2 py-1 rounded transition-colors">${q}</button>`).join('')}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+async function sendQA() {
+  const input = document.getElementById('qa-input');
+  const question = input.value.trim();
+  if (!question) return;
+
+  const histEl = document.getElementById('qa-history');
+  input.value = '';
+  const btn = document.getElementById('qa-btn');
+  btn.disabled = true;
+  btn.textContent = '…';
+
+  // Add user bubble
+  histEl.innerHTML += `
+    <div class="flex justify-end">
+      <div class="bg-indigo-600 text-white rounded-xl rounded-tr-sm px-4 py-2.5 max-w-lg text-sm">${escHtml(question)}</div>
+    </div>`;
+
+  // Loading bubble
+  const loadId = 'qa-loading-' + Date.now();
+  histEl.innerHTML += `<div id="${loadId}" class="flex justify-start">
+    <div class="bg-white border border-gray-200 rounded-xl rounded-tl-sm px-4 py-3 max-w-lg">
+      <div class="spinner"></div>
+    </div>
+  </div>`;
+  histEl.scrollTop = histEl.scrollHeight;
+
+  try {
+    const res = await post('/api/policy/qa', { question });
+    document.getElementById(loadId)?.remove();
+
+    if (res.refused) {
+      histEl.innerHTML += `
+        <div class="flex justify-start fade-in">
+          <div class="bg-gray-50 border border-gray-200 rounded-xl rounded-tl-sm px-4 py-3 max-w-lg">
+            <div class="flex items-center gap-2 mb-2 text-gray-500">
+              <span class="text-sm">🚫</span>
+              <span class="text-xs font-semibold uppercase tracking-wide">Outside Policy Scope</span>
+            </div>
+            <p class="text-sm text-gray-600">${escHtml(res.refusal_reason || 'This question is outside the policy library.')}</p>
+          </div>
+        </div>`;
+    } else {
+      let citsHtml = '';
+      if (res.citations?.length) {
+        citsHtml = `<div class="mt-3 space-y-2">
+          ${res.citations.map(c => `
+            <div class="bg-indigo-50 rounded-lg p-2.5">
+              <div class="flex items-center gap-1.5 mb-1">
+                <span class="text-xs font-bold text-indigo-700">${escHtml(c.doc_id||'')}</span>
+                <span class="text-xs text-indigo-400">${escHtml(c.section||'')}</span>
+              </div>
+              <blockquote class="text-xs text-indigo-800 italic border-l-2 border-indigo-300 pl-2">"${escHtml(c.quote||'')}"</blockquote>
+            </div>`).join('')}
+        </div>`;
+      }
+      const confPct = Math.round((res.confidence||0)*100);
+      histEl.innerHTML += `
+        <div class="flex justify-start fade-in">
+          <div class="bg-white border border-gray-200 rounded-xl rounded-tl-sm px-4 py-3 max-w-lg shadow-sm">
+            <p class="text-sm text-gray-800 leading-relaxed">${escHtml(res.answer||'')}</p>
+            ${citsHtml}
+            <div class="mt-2 text-xs text-gray-400">Confidence: ${confPct}%</div>
+          </div>
+        </div>`;
+    }
+  } catch (ex) {
+    document.getElementById(loadId)?.remove();
+    histEl.innerHTML += `<div class="flex justify-start fade-in">
+      <div class="bg-red-50 border border-red-200 rounded-xl rounded-tl-sm px-4 py-3 max-w-lg">
+        <p class="text-sm text-red-600">Error: ${escHtml(ex.message)}</p>
+      </div>
+    </div>`;
+  }
+
+  btn.disabled = false;
+  btn.textContent = 'Ask';
+  histEl.scrollTop = histEl.scrollHeight;
+}
+
+// ============================================================
+// Modal helpers
+// ============================================================
+function showModal(html) {
+  document.getElementById('modal-content').innerHTML = html;
+  document.getElementById('modal-overlay').classList.remove('hidden');
+}
+
+function closeModal() {
+  document.getElementById('modal-overlay').classList.add('hidden');
+}
+
+document.getElementById('modal-overlay').addEventListener('click', e => {
+  if (e.target === document.getElementById('modal-overlay')) closeModal();
+});
+
+// ============================================================
+// Utilities
+// ============================================================
+function escHtml(str) {
+  if (!str) return '';
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ============================================================
+// Index status checker
+// ============================================================
+async function checkIndexStatus() {
+  try {
+    const s = await get('/api/policy/index/status');
+    const el = document.getElementById('index-status');
+    if (s.indexed) {
+      el.innerHTML = `<span class="text-green-600">● ${s.chunk_count} policy chunks indexed</span>`;
+    } else {
+      el.innerHTML = `<span class="text-orange-500">● Indexing policies…</span>`;
+    }
+  } catch {}
+}
+
+// ============================================================
+// Bootstrap
+// ============================================================
+window.addEventListener('DOMContentLoaded', () => {
+  navigate('submissions');
+  checkIndexStatus();
+  setInterval(checkIndexStatus, 15000);
+});
+</script>
+</body>
+</html>
